@@ -4,9 +4,9 @@ import requests
 from skyfield.api import load, wgs84
 
 
-# ZMIANA: Zmniejszono domyślną ilość próbek do 3600 (1 godzina symulacji)
-def generate_meteo_blue_shield(samples=3600, filename='blue_shield_meteo_data_small.csv'):
-    print(f"Tworzenie symulacji ({samples} sekund)...")
+# Powrót do 86400 sekund (pełne 24 godziny) i oryginalnej nazwy pliku
+def generate_meteo_blue_shield(samples=86400, filename='blue_shield_meteo_data.csv'):
+    print(f"Tworzenie dobowej symulacji ({samples} sekund)...")
     print("1. Łączenie z serwerem Celestrak...")
 
     tle_url = 'https://celestrak.org/NORAD/elements/gp.php?GROUP=gps-ops&FORMAT=tle'
@@ -87,9 +87,9 @@ def generate_meteo_blue_shield(samples=3600, filename='blue_shield_meteo_data_sm
 
     print("4. Wstrzykiwanie Ataków...")
 
-    # ZMIANA: Czas trwania ataku jest teraz dynamiczny (np. 10% długości całej symulacji)
-    len_g = max(10, int(samples * 0.10))
+    # Atak naziemny (1 godzina = 3600 sekund)
     start_g = int(samples * 0.15)
+    len_g = min(3600, int(samples * 0.8))  # Zabezpieczenie na wypadek bardzo małej próbki
 
     for name in antennas.keys():
         bias = np.random.uniform(500, 2000) if name in ['N', 'E'] else np.random.uniform(-50, 50)
@@ -97,9 +97,9 @@ def generate_meteo_blue_shield(samples=3600, filename='blue_shield_meteo_data_sm
         df_data[f'{name}_snr'][start_g:start_g + len_g] += 30
     labels[start_g:start_g + len_g] = 1
 
-    # ZMIANA: Atak powietrzny zajmuje 15% długości symulacji
-    len_a = max(10, int(samples * 0.15))
+    # Atak powietrzny (1.5 godziny = 5400 sekund)
     start_a = int(samples * 0.70)
+    len_a = min(5400, int(samples * 0.25))
 
     for name in antennas.keys():
         df_data[f'{name}_pseudorange'][start_a:start_a + len_a] -= np.linspace(0, 400, len_a)
@@ -110,12 +110,13 @@ def generate_meteo_blue_shield(samples=3600, filename='blue_shield_meteo_data_sm
     df_data['label'] = labels
     df = pd.DataFrame(df_data)
 
+    # Wycinamy marginesy po funkcji gradient
     df = df.iloc[10:-10].reset_index(drop=True)
 
     df.to_csv(filename, index=False)
-    print(f"✅ SUKCES: Wygenerowano zredukowaną paczkę danych ({filename})")
+    print(f"✅ SUKCES: Wygenerowano dobę danych ze zjawiskami pogody ({filename})")
 
 
 if __name__ == '__main__':
-    # Jeśli chcesz np. wygenerować równe 5000 próbek, wystarczy że podasz to tu:
-    generate_meteo_blue_shield(samples=3600)
+    # Generujemy z powrotem pełne 86 400
+    generate_meteo_blue_shield(samples=86400)

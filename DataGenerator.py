@@ -4,158 +4,99 @@ import requests
 from skyfield.api import load, wgs84
 
 
-def get_real_weather_data(samples=86400):
-    print("   -> Pobieranie rzeczywistych danych meteo (Open-Meteo dla Gdańska)...")
-
-    # Darmowe API Open-Meteo (Gdańsk: 54.35N, 18.64E) - pobieramy minione 24h
-    url = "https://api.open-meteo.com/v1/forecast?latitude=54.35&longitude=18.64&hourly=temperature_2m,relative_humidity_2m,surface_pressure&past_days=1&forecast_days=0"
-
-    try:
-        response = requests.get(url).json()
-
-        # Pobieramy równe 24 godziny danych (24 punkty)
-        hourly_temp = response['hourly']['temperature_2m'][:24]
-        hourly_hum = response['hourly']['relative_humidity_2m'][:24]
-        hourly_press = response['hourly']['surface_pressure'][:24]
-
-        # Interpolacja liniowa (rozciągnięcie 24 punktów na 86 400 sekund)
-        t_hourly = np.linspace(0, samples, 24)
-        t_seconds = np.arange(samples)
-
-        temp_c = np.interp(t_seconds, t_hourly, hourly_temp)
-        humidity = np.interp(t_seconds, t_hourly, hourly_hum)
-        pressure = np.interp(t_seconds, t_hourly, hourly_press)
-
-        # Dodajemy mikroszumy sekundowe (np. nagłe podmuchy wiatru, wahania czujnika)
-        temp_c += np.random.normal(0, 0.05, samples)
-        humidity += np.random.normal(0, 0.2, samples)
-        pressure += np.random.normal(0, 0.02, samples)
-
-        print("   ✅ Pomyślnie pobrano i wyinterpolowano rzeczywistą pogodę!")
-        return temp_c, humidity, pressure
-
-    except Exception as e:
-        print(f"   ❌ Błąd pobierania pogody: {e}. Przełączam na tryb sztuczny.")
-        # Fallback - jeśli brak internetu, użyj starej metody z sin/cos
-        t_hours = np.arange(samples) / 3600.0
-        temp_c = 15 + 8 * np.sin(2 * np.pi * (t_hours - 9) / 24) + np.random.normal(0, 0.2, samples)
-        humidity = 70 + 20 * np.cos(2 * np.pi * (t_hours - 9) / 24) + np.random.normal(0, 1.5, samples)
-        humidity = np.clip(humidity, 10, 100)
-        pressure = 1013 + np.cumsum(np.random.normal(0, 0.05, samples))
-        pressure = np.clip(pressure, 990, 1030)
-        return temp_c, humidity, pressure
+def get_real_weather_data(samples=86400, day_offset=0):
+    t_h = np.arange(samples) / 3600.0
+    temp = (15 + day_offset) + 8 * np.sin(2 * np.pi * (t_h - 9) / 24) + np.random.normal(0, 0.5, samples)
+    hum = (70 - day_offset * 2) + 20 * np.cos(2 * np.pi * (t_h - 9) / 24) + np.random.normal(0, 1.5, samples)
+    press = (1013 + day_offset) + np.cumsum(np.random.normal(0, 0.05, samples))
+    return temp, np.clip(hum, 10, 100), np.clip(press, 980, 1040)
 
 
-# Powrót do 86400 sekund (pełne 24 godziny) i oryginalnej nazwy pliku
-def generate_meteo_blue_shield(samples=86400, filename='blue_shield_meteo_data.csv'):
-    print(f"Tworzenie dobowej symulacji ({samples} sekund)...")
-    print("1. Łączenie z serwerem Celestrak...")
-
-    tle_url = 'https://celestrak.org/NORAD/elements/gp.php?GROUP=gps-ops&FORMAT=tle'
-    local_tle_file = 'gps_real_data.txt'
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-
-    try:
-        response = requests.get(tle_url, headers=headers)
-        if response.status_code == 200:
-            content = response.text
-            if "<html" in content.lower():
-                raise ConnectionError("Serwer zwrócił stronę HTML. Spróbuj za chwilę.")
-            with open(local_tle_file, 'w') as f:
-                f.write(content)
-        else:
-            raise ConnectionError("Błąd pobierania TLE.")
-    except Exception as e:
-        print(f"Błąd sieci: {e}. Używam istniejącego pliku TLE (jeśli istnieje).")
-
+def generate_national_blue_shield(filename, day_offset):
+    samples = 86400
     ts = load.timescale()
-    satellites = load.tle_file(local_tle_file)
+    satellites = load.tle_file('gps_real_data.txt')
     sat = list({s.name: s for s in satellites}.values())[0]
-    print(f"Wybrano satelitę: {sat.name}")
-
     t_seconds = np.arange(samples)
-    t = ts.utc(2026, 5, 10, 0, 0, t_seconds)
+    t = ts.utc(2026, 5, 10 + day_offset, 0, 0, t_seconds)
 
-    antennas = {
-        'N': wgs84.latlon(54.40, 18.64), 'S': wgs84.latlon(54.30, 18.64),
-        'E': wgs84.latlon(54.35, 18.70), 'W': wgs84.latlon(54.35, 18.58)
+    # 9 GŁÓWNYCH STACJI REFERENCYJNYCH W POLSCE
+    miasta = {
+        'WAW': (52.23, 21.01), 'GDN': (54.35, 18.64), 'KRK': (50.06, 19.94),
+        'WRO': (51.10, 17.03), 'POZ': (52.40, 16.92), 'BIA': (53.13, 23.16),
+        'SZC': (53.42, 14.55), 'LUB': (51.24, 22.56), 'RZE': (50.04, 21.99)
     }
+    antennas = {name: wgs84.latlon(lat, lon) for name, (lat, lon) in miasta.items()}
 
-    print("2. Generowanie realistycznej pogody (wywołanie API)...")
+    temp, hum, press = get_real_weather_data(samples, day_offset)
+    kp_index = np.random.choice([1, 2, 3, 7, 8], samples, p=[0.75, 0.1, 0.1, 0.03, 0.02])
 
-    # Zastąpiona logika pogodowa - teraz korzystamy z funkcji wyżej
-    temp_c, humidity, pressure = get_real_weather_data(samples)
+    df_data = {'timestamp': t_seconds, 'temperature': temp, 'pressure': press, 'humidity': hum, 'kp_index': kp_index}
 
-    # Kp-index pozostaje bez zmian (to pogoda kosmiczna, trudniejsza do prostego wpięcia z API)
-    kp_index = np.random.choice([1, 2, 3, 5], samples, p=[0.7, 0.2, 0.08, 0.02])
-
-    df_data = {
-        'timestamp': t_seconds,
-        'temperature': temp_c,
-        'pressure': pressure,
-        'humidity': humidity,
-        'kp_index': kp_index
-    }
-
-    print("3. Obliczanie fizyki orbitalnej i opóźnień troposferycznych...")
-    for name, location in antennas.items():
-        difference = sat - location
-        topocentric = difference.at(t)
-        alt, az, distance = topocentric.altaz()
-
-        alt_degrees = np.maximum(alt.degrees, 5.0)
-
-        e = (humidity / 100.0) * 6.11 * np.exp((17.27 * temp_c) / (237.3 + temp_c))
-        zhd = 0.0022768 * pressure
-        zwd = 0.002277 * (1255 / (temp_c + 273.15) + 0.05) * e
-        tropo_delay = (zhd + zwd) / np.sin(np.radians(alt_degrees))
-
-        base_noise = np.random.normal(0, 0.5, samples) * (1 + kp_index / 5)
-        multipath = np.random.exponential(scale=2.5, size=samples)
-
-        df_data[f'{name}_pseudorange'] = distance.m + tropo_delay + base_noise + multipath
-
-        base_snr = 30 + (alt_degrees / 90.0) * 20
-        df_data[f'{name}_snr'] = base_snr - (humidity / 100.0 * 2) + np.random.normal(0, 1, samples)
-
-        range_rate = np.gradient(distance.m)
-        doppler_shift = -(range_rate / 299792458.0) * 1575.42e6
-        df_data[f'{name}_doppler'] = doppler_shift + np.random.normal(0, 1.5, samples)
+    # Symulacja satelitarna dla całej Polski
+    for name, loc in antennas.items():
+        diff = sat - loc
+        topo = diff.at(t)
+        alt, az, dist = topo.altaz()
+        alt_deg = np.maximum(alt.degrees, 5.0)
+        noise = np.random.normal(0, 1, samples) * (kp_index / 2.5)  # Szum burz słonecznych
+        df_data[f'{name}_pseudorange'] = dist.m + noise + np.random.exponential(2.5, samples)
+        df_data[f'{name}_snr'] = (30 + (alt_deg / 90.0) * 20) - noise
+        df_data[f'{name}_doppler'] = -(np.gradient(dist.m) / 299792458.0) * 1575.42e6 + np.random.normal(0, 2, samples)
 
     labels = np.zeros(samples)
 
-    print("4. Wstrzykiwanie Ataków...")
+    def profile(l, mv, tp):
+        tm = np.linspace(0, 1, l)
+        if tp == 'linear': return mv * tm
+        if tp == 'pulse': return np.where(np.sin(tm * 40 * np.pi) > 0, mv, 0)
+        if tp == 'sine': return mv * np.sin(tm * 6 * np.pi)
+        return np.full(l, mv) + np.random.normal(0, abs(mv) * 0.05, l)
 
-    # Atak naziemny (1 godzina = 3600 sekund)
-    start_g = int(samples * 0.15)
-    len_g = min(3600, int(samples * 0.8))  # Zabezpieczenie na wypadek bardzo małej próbki
+    # NOWOŚĆ: EPICENTRA ATAKÓW
+    def get_affected_cities(radius_km=200):
+        # Losujemy punkt w Polsce
+        atk_lat = np.random.uniform(50.0, 54.5)
+        atk_lon = np.random.uniform(14.5, 23.5)
+        affected = []
+        for name, (lat, lon) in miasta.items():
+            # Szybkie przybliżenie euklidesowe odległości w km
+            dist = np.sqrt(((lat - atk_lat) * 111) ** 2 + ((lon - atk_lon) * 70) ** 2)
+            if dist <= radius_km:
+                affected.append(name)
+        # Jeśli atak spadł w las i nikogo nie trafił, wymuszamy 1 miasto
+        return affected if affected else [list(miasta.keys())[np.random.randint(0, 9)]]
 
-    for name in antennas.keys():
-        bias = np.random.uniform(500, 2000) if name in ['N', 'E'] else np.random.uniform(-50, 50)
-        df_data[f'{name}_pseudorange'][start_g:start_g + len_g] += bias
-        df_data[f'{name}_snr'][start_g:start_g + len_g] += 30
-    labels[start_g:start_g + len_g] = 1
+    print(f" -> Generowanie ataków i anomalii (Dzień {day_offset})...")
+    # 1. Ataki Naziemne (Zagłuszacze - mały zasięg 150 km)
+    for _ in range(np.random.randint(2, 5)):
+        l, s = np.random.randint(1800, 5000), np.random.randint(0, 80000)
+        cele = get_affected_cities(radius_km=150)
+        for n in cele: df_data[f'{n}_snr'][s:s + l] -= profile(l, 25, 'pulse')
+        labels[s:s + l] = 1
 
-    # Atak powietrzny (1.5 godziny = 5400 sekund)
-    start_a = int(samples * 0.70)
-    len_a = min(5400, int(samples * 0.25))
+    # 2. Ataki Powietrzne (Drony - średni zasięg 250 km)
+    for _ in range(np.random.randint(1, 4)):
+        l, s = np.random.randint(3600, 9000), np.random.randint(0, 75000)
+        cele = get_affected_cities(radius_km=250)
+        for n in cele: df_data[f'{n}_doppler'][s:s + l] += profile(l, 300, 'linear')
+        labels[s:s + l] = np.maximum(labels[s:s + l], 2)
 
-    for name in antennas.keys():
-        df_data[f'{name}_pseudorange'][start_a:start_a + len_a] -= np.linspace(0, 400, len_a)
-        df_data[f'{name}_snr'][start_a:start_a + len_a] += 15
-        df_data[f'{name}_doppler'][start_a:start_a + len_a] += 200
-    labels[start_a:start_a + len_a] = 2
+    # 3. Atak Replay (Szeroki zasięg)
+    for _ in range(np.random.randint(1, 3)):
+        l, s = np.random.randint(2000, 6000), np.random.randint(0, 80000)
+        cele = get_affected_cities(radius_km=300)
+        for n in cele: df_data[f'{n}_pseudorange'][s:s + l] += profile(l, 1000, 'sine')
+        labels[s:s + l] = np.maximum(labels[s:s + l], 3)
 
     df_data['label'] = labels
-    df = pd.DataFrame(df_data)
-
-    # Wycinamy marginesy po funkcji gradient
-    df = df.iloc[10:-10].reset_index(drop=True)
-
-    df.to_csv(filename, index=False)
-    print(f"✅ SUKCES: Wygenerowano dobę danych ze zjawiskami pogody ({filename})")
+    pd.DataFrame(df_data).iloc[10:-10].to_csv(filename, index=False)
+    print(f"✅ ZAPISANO: {filename}")
 
 
 if __name__ == '__main__':
-    # Generujemy z powrotem pełne 86 400
-    generate_meteo_blue_shield(samples=86400)
+    print("🚀 URUCHAMIANIE: KRAJOWY GENERATOR ZAGROŻEŃ GNSS")
+    # Generujemy epicką ilość danych (5 Dni Treningu, 3 Dni Egzaminu)
+    for i in range(1, 6): generate_national_blue_shield(f'blue_shield_train_day_{i}.csv', day_offset=i)
+    for i in range(1, 4): generate_national_blue_shield(f'blue_shield_test_day_{i}.csv', day_offset=i + 5)
+    print("🏆 Baza danych wygenerowana! Czas na trening SI.")

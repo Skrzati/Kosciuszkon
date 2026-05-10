@@ -4,6 +4,48 @@ import requests
 from skyfield.api import load, wgs84
 
 
+def get_real_weather_data(samples=86400):
+    print("   -> Pobieranie rzeczywistych danych meteo (Open-Meteo dla Gdańska)...")
+
+    # Darmowe API Open-Meteo (Gdańsk: 54.35N, 18.64E) - pobieramy minione 24h
+    url = "https://api.open-meteo.com/v1/forecast?latitude=54.35&longitude=18.64&hourly=temperature_2m,relative_humidity_2m,surface_pressure&past_days=1&forecast_days=0"
+
+    try:
+        response = requests.get(url).json()
+
+        # Pobieramy równe 24 godziny danych (24 punkty)
+        hourly_temp = response['hourly']['temperature_2m'][:24]
+        hourly_hum = response['hourly']['relative_humidity_2m'][:24]
+        hourly_press = response['hourly']['surface_pressure'][:24]
+
+        # Interpolacja liniowa (rozciągnięcie 24 punktów na 86 400 sekund)
+        t_hourly = np.linspace(0, samples, 24)
+        t_seconds = np.arange(samples)
+
+        temp_c = np.interp(t_seconds, t_hourly, hourly_temp)
+        humidity = np.interp(t_seconds, t_hourly, hourly_hum)
+        pressure = np.interp(t_seconds, t_hourly, hourly_press)
+
+        # Dodajemy mikroszumy sekundowe (np. nagłe podmuchy wiatru, wahania czujnika)
+        temp_c += np.random.normal(0, 0.05, samples)
+        humidity += np.random.normal(0, 0.2, samples)
+        pressure += np.random.normal(0, 0.02, samples)
+
+        print("   ✅ Pomyślnie pobrano i wyinterpolowano rzeczywistą pogodę!")
+        return temp_c, humidity, pressure
+
+    except Exception as e:
+        print(f"   ❌ Błąd pobierania pogody: {e}. Przełączam na tryb sztuczny.")
+        # Fallback - jeśli brak internetu, użyj starej metody z sin/cos
+        t_hours = np.arange(samples) / 3600.0
+        temp_c = 15 + 8 * np.sin(2 * np.pi * (t_hours - 9) / 24) + np.random.normal(0, 0.2, samples)
+        humidity = 70 + 20 * np.cos(2 * np.pi * (t_hours - 9) / 24) + np.random.normal(0, 1.5, samples)
+        humidity = np.clip(humidity, 10, 100)
+        pressure = 1013 + np.cumsum(np.random.normal(0, 0.05, samples))
+        pressure = np.clip(pressure, 990, 1030)
+        return temp_c, humidity, pressure
+
+
 # Powrót do 86400 sekund (pełne 24 godziny) i oryginalnej nazwy pliku
 def generate_meteo_blue_shield(samples=86400, filename='blue_shield_meteo_data.csv'):
     print(f"Tworzenie dobowej symulacji ({samples} sekund)...")
@@ -39,15 +81,12 @@ def generate_meteo_blue_shield(samples=86400, filename='blue_shield_meteo_data.c
         'E': wgs84.latlon(54.35, 18.70), 'W': wgs84.latlon(54.35, 18.58)
     }
 
-    print("2. Generowanie realistycznej pogody...")
-    t_hours = t_seconds / 3600.0
+    print("2. Generowanie realistycznej pogody (wywołanie API)...")
 
-    temp_c = 15 + 8 * np.sin(2 * np.pi * (t_hours - 9) / 24) + np.random.normal(0, 0.2, samples)
-    humidity = 70 + 20 * np.cos(2 * np.pi * (t_hours - 9) / 24) + np.random.normal(0, 1.5, samples)
-    humidity = np.clip(humidity, 10, 100)
-    pressure = 1013 + np.cumsum(np.random.normal(0, 0.05, samples))
-    pressure = np.clip(pressure, 990, 1030)
+    # Zastąpiona logika pogodowa - teraz korzystamy z funkcji wyżej
+    temp_c, humidity, pressure = get_real_weather_data(samples)
 
+    # Kp-index pozostaje bez zmian (to pogoda kosmiczna, trudniejsza do prostego wpięcia z API)
     kp_index = np.random.choice([1, 2, 3, 5], samples, p=[0.7, 0.2, 0.08, 0.02])
 
     df_data = {

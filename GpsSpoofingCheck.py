@@ -132,6 +132,6 @@ print("\n--- SZCZEGÓŁOWY RAPORT KLASYFIKACJI ---")
 print(classification_report(y_test, y_pred, target_names=['Normalny', 'Atak Naziemny', 'Atak Powietrzny']))
 
 # ZMIANA 2: Delikatnie inna nazwa modelu wyjściowego
-model_filename = 'blekitna_tarcza_meteo_small_model.keras'
+model_filename = 'blekitna_tarcza_meteo_model.keras'
 model.save(model_filename)
 print(f"\n✅ SUKCES! Zaawansowany model został zapisany jako '{model_filename}'")

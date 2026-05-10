@@ -4,9 +4,14 @@ import seaborn as sns
 
 print("--- Rozpoczęcie Eksploracyjnej Analizy Danych (EDA) ---")
 
-# 1. Wczytanie danych
-df = pd.read_csv('blue_shield_meteo_data.csv')
-print(f"Załadowano zbiór danych: {df.shape[0]} wierszy, {df.shape[1]} kolumn.\n")
+# 1. Wczytanie danych (Używamy zbioru testowego z Dnia 2)
+plik_danych = 'blue_shield_test.csv'
+try:
+    df = pd.read_csv(plik_danych)
+    print(f"Załadowano zbiór danych '{plik_danych}': {df.shape[0]} wierszy, {df.shape[1]} kolumn.\n")
+except FileNotFoundError:
+    print(f"❌ BŁĄD: Nie znaleziono pliku '{plik_danych}'. Najpierw uruchom DataGenerator.py!")
+    exit()
 
 # 2. Sprawdzenie jakości danych (Missing values)
 print("--- Kontrola Jakości Danych ---")
@@ -26,8 +31,9 @@ print(df[cols_to_show].describe().loc[['mean', 'min', 'max', 'std']])
 
 # A. Rozkład Klas (Normalny vs Anomalie)
 plt.figure(figsize=(8, 5))
-sns.countplot(data=df, x='label', palette='Set2')
-plt.title('Dystrybucja klas w zbiorze danych')
+# Dodano hue='label' i legend=False, aby naprawić błąd FutureWarning z biblioteki Seaborn
+sns.countplot(data=df, x='label', hue='label', palette='Set2', legend=False)
+plt.title('Dystrybucja klas w zbiorze danych (Dzień Testowy)')
 plt.xlabel('Klasa (0: Normalny, 1: Atak Naziemny, 2: Atak Powietrzny)')
 plt.ylabel('Liczba próbek')
 plt.grid(axis='y', linestyle='--', alpha=0.7)
@@ -36,9 +42,19 @@ plt.savefig('eda_class_distribution.png')
 plt.show()
 
 # B. Szereg Czasowy (Time-Series) - Pokazanie ataku na wykresie
-# Wybieramy wycinek czasu (np. od sekundy 10000 do 20000), żeby złapać moment ataku
-start_idx = 10000
-end_idx = 20000
+# DYNAMICZNE SZUKANIE ATAKU (bo ataki są teraz w losowych momentach!)
+atak_indeksy = df[df['label'] > 0].index
+
+if not atak_indeksy.empty:
+    pierwszy_atak = atak_indeksy[0]
+    # Wybieramy okno: 3000 sekund przed atakiem i 8000 po nim, żeby ładnie to uchwycić
+    start_idx = max(0, pierwszy_atak - 3000)
+    end_idx = min(len(df), pierwszy_atak + 8000)
+    print(f"\nZnaleziono atak w sekundzie {pierwszy_atak}. Rysowanie wykresu od {start_idx} do {end_idx}...")
+else:
+    print("\nUwaga: W tym zbiorze nie wylosowano żadnych ataków! Rysuję domyślny fragment.")
+    start_idx = 10000
+    end_idx = 20000
 
 plt.figure(figsize=(14, 6))
 plt.plot(df['timestamp'][start_idx:end_idx], df['N_snr'][start_idx:end_idx], label='SNR Anteny N', color='blue', alpha=0.6)
@@ -49,7 +65,7 @@ if not attack_indices.empty:
     for idx in attack_indices:
         plt.axvline(x=df['timestamp'][idx], color='red', alpha=0.05)
 
-plt.title('Szereg Czasowy: Stosunek Sygnału do Szumu (SNR) w czasie z widocznymi atakami')
+plt.title('Szereg Czasowy: Stosunek Sygnału do Szumu (SNR) w czasie z widocznymi atakami (Ramp Attack)')
 plt.xlabel('Czas (sekundy)')
 plt.ylabel('Wartość SNR')
 plt.legend()
